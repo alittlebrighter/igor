@@ -1,0 +1,18 @@
+[Unit]
+Description=nats-server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/nats-server -a 127.0.0.1 --cluster nats://0.0.0.0:4248 --routes "`/usr/bin/lansrv -scan -service nats-cluster`"
+ExecStop=/bin/kill -SIGHUP $MAINPID
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+
+[LanSrv]
+Name=nats-cluster
+Port=4248
+Protocol=nats
