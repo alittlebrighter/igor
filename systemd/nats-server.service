@@ -4,10 +4,10 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/nats-server -a 127.0.0.1 --cluster nats://0.0.0.0:4248 --routes "`/usr/bin/lansrv -scan -service nats-cluster`"
+ExecStart=/usr/bin/nats-server_start.sh
 ExecStop=/bin/kill -SIGHUP $MAINPID
 Restart=always
-RestartSec=3
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
