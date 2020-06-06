@@ -8,10 +8,15 @@ for svc in $SVCS ; do
     systemctl stop $svc
 done
 
-# download binaries
+# download/build binaries
 cd ..
+# TO DO
 echo "downloading binaries..."
-cp assets/* /usr/bin/
+# for now, just creating a dist directory with all of the necessary tools built for your architecture will work
+cp dist/* /usr/bin/
+
+chmod +x /scripts/*.sh
+cp scripts/* /usr/bin/
 
 mkdir -p /opt/igor/data
 
