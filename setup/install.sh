@@ -7,9 +7,9 @@ SVCS=`ls -a *.service`
 for svc in $SVCS ; do
     systemctl stop $svc
 done
+cd ..
 
 # download/build binaries
-cd ..
 # TO DO
 echo "downloading binaries..."
 # for now, just creating a dist directory with all of the necessary tools built for your architecture will work
