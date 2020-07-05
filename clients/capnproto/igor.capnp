@@ -1,8 +1,12 @@
 @0xaeb14304b9528324;
 
+# capnp compile -I$GOPATH/src/zombiezen.com/go/capnproto2/std -ogo foo/books.capnp
+
 using Go = import "/go.capnp";
-$Go.package("igor");
-$Go.import("github.com/alittlebrighter/igor");
+$Go.package("models");
+$Go.import("github.com/alittlebrighter/igor/models");
+
+using import "temperature.capnp".Temperature;
 
 struct KeyValue {
     key @0 :Text;
@@ -29,7 +33,10 @@ struct EventMeta {
 
 struct SensorEvent {
     meta @0 :EventMeta;
-    payload @1 :List(KeyValue);
+    payload :union {
+        none @1 :Void;
+        temperature @2 :Temperature;
+    }
 }
 
 enum EventType {
