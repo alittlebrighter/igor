@@ -7,8 +7,11 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"plugin"
 	"strings"
+	"time"
 
+	"github.com/alittlebrighter/embd"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/nats-io/nats.go"
 	"github.com/robertkrimen/otto"
@@ -19,11 +22,18 @@ import (
 var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 const (
+	// should we just have one file structure instead of forcing duplication of a folder hierarchy
+	// igor/state/garageDoors/{state.json,reducer.js,garageDoors.so}
 	ReducerDir = "reducers"
-	StateDir   = "state"
+	StoreDir   = "state"
+
+	ChannelPrefix = "igor."
+	EventStream   = ChannelPrefix + "events"
 )
 
 func main() {
+	// NATS is crucial to all of the operations
+	// TODO: interact with NATS through an interface
 	nc, err := nats.Connect(nats.DefaultURL)
 	handleErr(err, true)
 	defer nc.Close()
@@ -31,21 +41,71 @@ func main() {
 	handleErr(err, true)
 	defer ec.Close()
 
-	// initialize the starting state?
-	// read from state directory
+	// start any component plugins
+	if err := embd.InitGPIO(); err != nil {
+		panic(err)
+	}
+	defer embd.CloseGPIO()
 
 	// both effects and reducers are stored in respective directories
-	// effects
+	// TODO: effects (read in actions and asynchronously dispatch 0:n actions)
 	// at start read in all effects and reducers files and setup subscriptions based on annotations `"igor.actionSubscriptions "action1","action2",...`
 	// reducers
 	// reducerSubs: keys=action types, values=list of reducers subscribed
 	vm := otto.New()
 
-	reducerSubs := ProcessReducers(vm, ReducerDir, StateDir)
+	states := make(map[string][]byte)
+	reducers := make(map[igor.EventType][]igor.OttoScript)
+	components := map[string]igor.IgorPlugin{}
+	filepath.Walk(ComponentDir, func(path string, info os.FileInfo, err error) error {
+		if info.IsDir() {
+			return nil
+		}
+		directory := path[0:strings.LastIndex(path, "/")]
+
+		switch {
+		case strings.HasSuffix(path, ".js"): // reducers, TODO: make this case conditional a method to accommodate more reducer types
+			program, eTypes, err := ParseScript(vm, path)
+			if err != nil {
+				handleErr(err, false)
+				return err
+			}
+
+			for _, sub := range eTypes {
+				event := igor.EventType(sub)
+				if _, exists := reducers[event]; !exists {
+					reducers[event] = []igor.OttoScript{}
+				}
+
+				reducers[event] = append(reducers[event],
+					igor.OttoScript{Path: path, Program: program})
+
+			}
+		case strings.HasSuffix(path, ".so"): // components that sense or control things, not necessarily present in every directory
+			newComponent, err := ProcessComponent(path, DispatcherFactory(ec))
+			if err != nil {
+				return err
+			}
+			components[directory] = newComponent
+		case strings.HasSuffix(path, ".json"): // existing state, not guaranteed to be in every directory
+			partialState, err := ioutil.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			states[directory] = partialState
+		default:
+			return nil
+		}
+
+		return nil
+	})
+
+	// initialize the starting state
+	// read from state directory
 
 	// listen for incoming actions
 	events := make(chan igor.Event, 10)
-	eventSub, err := ec.BindRecvQueueChan("igor.events", "events_queue", events)
+	eventSub, err := ec.BindRecvQueueChan(EventStream, "events_queue", events)
 	handleErr(err, true)
 	defer eventSub.Unsubscribe()
 	defer close(events)
@@ -54,14 +114,10 @@ func main() {
 	updater := func(path string, update interface{}) {
 		pathParts := strings.Split(path, "/")
 		pathParts[len(pathParts)-1] = strings.Split(pathParts[len(pathParts)-1], ".")[0]
-		ec.Publish("igor."+StateDir+strings.Join(pathParts, "."), update)
+		ec.Publish(ChannelPrefix+StoreDir+strings.Join(pathParts, "."), update)
 	}
 
-	go HandleEvents(events, updater, vm, reducerSubs, StateDir)
-
-	// load device controllers via go modules
-	// each module should have two methods, StateSubscription() string and func([]byte)
-	// device controllers run code based on new state dispatching error events as needed
+	go HandleEvents(events, updater, vm, reducers, StoreDir)
 
 }
 
@@ -78,33 +134,11 @@ func handleErr(err error, fatal bool) {
 }
 
 func ProcessReducers(vm *otto.Otto, reducerDir, stateDir string) map[igor.EventType][]igor.OttoScript {
-	reducerSubs := map[igor.EventType][]igor.OttoScript{
-		// this is igor.wildcard
-		igor.EventWildcard: []igor.OttoScript{},
-	}
+	reducerSubs := map[igor.EventType][]igor.OttoScript{}
 
 	filepath.Walk(reducerDir, func(path string, info os.FileInfo, err error) error {
 		if info.IsDir() {
 			return nil
-		}
-
-		program, eTypes, err := ParseScript(vm, path)
-		if err != nil {
-			handleErr(err, false)
-			return err
-		}
-
-		for _, sub := range eTypes {
-			event := igor.EventType(sub)
-			if _, exists := reducerSubs[event]; !exists {
-				reducerSubs[event] = []igor.OttoScript{}
-			}
-
-			partialPath := strings.Replace(path, reducerDir, "", 1)
-			reducerSubs[event] = append(reducerSubs[event],
-				igor.OttoScript{Path: partialPath, Program: program})
-
-			os.MkdirAll(stateDir+"/"+strings.TrimSuffix(partialPath, info.Name()), 0700)
 		}
 
 		return nil
@@ -116,7 +150,7 @@ func ProcessReducers(vm *otto.Otto, reducerDir, stateDir string) map[igor.EventT
 // HandleEvents has way too many arguments
 func HandleEvents(eventsIn <-chan igor.Event, update func(string, interface{}), vm *otto.Otto, reducers map[igor.EventType][]igor.OttoScript, stateDir string) {
 	for event := range eventsIn {
-		for _, script := range append(reducers[event.Type], reducers["*"]...) {
+		for _, script := range append(reducers[event.Type], reducers[igor.EventWildcard]...) {
 			state := make(map[string]interface{})
 
 			// reducer is reducers/**/script.js and state is state/**/state.json
@@ -196,9 +230,32 @@ func ParseScript(vm *otto.Otto, scriptPath string) (program *otto.Script, subs [
 	return
 }
 
+func ProcessComponent(componentPath string, publisher func(igor.Event)) (igor.IgorPlugin, error) {
+	p, err := plugin.Open(componentPath)
+	if err != nil {
+		return nil, err
+	}
+
+	componentInit, err := p.Lookup(igor.PluginInitSymbol)
+	if err != nil {
+		return nil, err
+	}
+
+	return componentInit.(func(func(igor.Event), []string) igor.IgorPlugin)(publisher, []string{componentPath[0:strings.LastIndex(componentPath, "/")]}), nil
+}
+
 type StateUpdate struct {
 	Path   string
 	Update interface{}
+}
+
+type Dispatcher = func(igor.Event)
+
+func DispatcherFactory(natsConn *nats.EncodedConn) Dispatcher {
+	return func(e igor.Event) {
+		e.Timestamp = time.Now()
+		natsConn.Publish(EventStream, e)
+	}
 }
 
 /*
