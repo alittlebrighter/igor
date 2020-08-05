@@ -2,6 +2,7 @@ package igor
 
 import (
 	"strings"
+	"time"
 
 	"github.com/robertkrimen/otto"
 )
@@ -18,14 +19,16 @@ type Store interface {
 }
 
 type Event struct {
-	Type    EventType   `json:"type"`
-	Payload interface{} `json:"payload"`
+	Type      EventType   `json:"type"`
+	Timestamp time.Time   `json:"timestamp"`
+	Payload   interface{} `json:"payload"`
 }
 
 type Runnable interface {
 	Run(args interface{}) interface{}
 }
 
+// parses a directive line inside of a JS file
 func ParseSubscriptionDirective(directive, prefix string) []string {
 	const wildcard = "*"
 
