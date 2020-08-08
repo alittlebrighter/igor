@@ -42,20 +42,20 @@ func FilesToMap(path string) (map[string]interface{}, error) {
 	err := filepath.Walk(path, func(subPath string, info os.FileInfo, err error) error {
 		subPath = strings.TrimPrefix(subPath, path)
 		subPath = strings.TrimPrefix(subPath, "/")
-		parts := strings.Split(subPath, "/")
-
 		if len(subPath) == 0 {
 			return nil
 		}
 
+		parts := strings.Split(subPath, "/")
+
 		dataPath := data
-		for _, part := range parts {
-			if part != attributesFile {
+		for i, part := range parts {
+			if (i != len(parts)-1 && part != attributesFile) || (i != len(parts)-1 && info.IsDir()) {
 				if _, exists := dataPath[part]; !exists {
 					dataPath[part] = make(map[string]interface{})
 				}
 				dataPath = dataPath[part].(map[string]interface{})
-			} else {
+			} else if i == len(parts)-1 && part == attributesFile {
 				fileData, err := ioutil.ReadFile(path + "/" + subPath)
 				if err != nil {
 					return err

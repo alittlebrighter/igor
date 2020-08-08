@@ -1,6 +1,7 @@
 package igor
 
 import (
+	"io/ioutil"
 	"os"
 	"testing"
 
@@ -35,10 +36,14 @@ func TestMapToFiles(t *testing.T) {
 
 func TestFilesToMap(t *testing.T) {
 	assert.Nil(t, setup())
+	ioutil.WriteFile(path+"/something.js", []byte(`{"one":2}`), 0755)
 
 	readData, err := FilesToMap(path)
+	_, shouldNotExist := readData["something"]
+
 	assert.Nil(t, err)
-	assert.Equal(t, float64(1), readData["one"])
+	assert.EqualValues(t, 1, readData["one"])
+	assert.Equal(t, false, shouldNotExist)
 	assert.Equal(t, true, readData["two"].(map[string]interface{})["nestedTwo"])
 
 	cleanup()
