@@ -6,17 +6,84 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/buger/jsonparser"
 )
 
 const attributesFile = "_vals.json"
 
+func JsonToFiles(data []byte, path string, perm os.FileMode) error {
+	attributes := []byte("{}")
+	basePath := ""
+	if len(path) > 0 {
+		basePath = path + "/"
+	}
+
+	err := jsonparser.ObjectEach(data, func(key []byte, value []byte, dataType jsonparser.ValueType, offset int) error {
+		switch dataType {
+		case jsonparser.Object:
+			nestedPath := basePath + string(key)
+			os.MkdirAll(nestedPath, perm)
+
+			// can we do this without recusion?
+			if err := JsonToFiles(value, nestedPath, perm); err != nil {
+				return err
+			}
+		default:
+			var err error
+			attributes, err = jsonparser.Set(attributes, value, string(key))
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	if len(attributes) > 2 {
+		return ioutil.WriteFile(basePath+attributesFile, attributes, perm)
+	}
+	return nil
+}
+
+/*
+func FilesToJson(path string) ([]byte, error) {
+	data := []byte("{}")
+
+	err := filepath.Walk(path, func(subPath string, info os.FileInfo, err error) error {
+		if info.IsDir() {
+			return nil
+		}
+
+		// handle attributes at root of path
+		// handle nested attributes
+
+		parts := strings.Split(subPath, "/")
+
+		var err error
+		data, err = jsonparser.Set(data)
+
+		return nil
+	})
+
+	return data, err
+}
+*/
 func MapToFiles(data map[string]interface{}, path string, perm os.FileMode) error {
 	simple := map[string]interface{}{}
+	basePath := ""
+	if len(path) > 0 {
+		basePath = path + "/"
+	}
 
 	for key, value := range data {
 		switch value.(type) {
 		case map[string]interface{}:
-			nestedPath := path + "/" + key
+			nestedPath := basePath + key
 			os.MkdirAll(nestedPath, perm)
 
 			// can we do this without recusion?
@@ -33,7 +100,7 @@ func MapToFiles(data map[string]interface{}, path string, perm os.FileMode) erro
 		return err
 	}
 
-	return ioutil.WriteFile(path+"/"+attributesFile, simpleData, perm)
+	return ioutil.WriteFile(basePath+attributesFile, simpleData, perm)
 }
 
 func FilesToMap(path string) (map[string]interface{}, error) {

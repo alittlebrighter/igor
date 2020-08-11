@@ -16,6 +16,15 @@ var (
 			"nestedTwo": true,
 		},
 	}
+
+	jsonData = []byte(`{
+		"one": 1,
+		"two": {
+			"nestedOne": "one",
+			"nestedTwo": true
+		}
+	}`)
+
 	path = "testData"
 )
 
@@ -25,6 +34,13 @@ func setup() error {
 
 func cleanup() {
 	os.RemoveAll(path)
+}
+
+func TestJsonToFiles(t *testing.T) {
+	assert.Nil(t, JsonToFiles(jsonData, path, 0755))
+	assert.DirExists(t, path+"/two")
+
+	cleanup()
 }
 
 func TestMapToFiles(t *testing.T) {
