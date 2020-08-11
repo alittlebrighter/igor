@@ -68,4 +68,4 @@ type ScriptManager interface {
 	HandleEvents(<-chan Event)
 }
 
-func NewScriptRunner(dirs []string)
+//func NewScriptRunner(dirs []string)
