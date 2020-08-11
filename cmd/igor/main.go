@@ -24,8 +24,7 @@ var json = jsoniter.ConfigCompatibleWithStandardLibrary
 const (
 	// should we just have one file structure instead of forcing duplication of a folder hierarchy
 	// igor/state/garageDoors/{state.json,reducer.js,garageDoors.so}
-	ReducerDir = "reducers"
-	StoreDir   = "state"
+	StoreDir = "state"
 
 	ChannelPrefix = "igor."
 	EventStream   = ChannelPrefix + "events"
@@ -57,7 +56,7 @@ func main() {
 	states := make(map[string][]byte)
 	reducers := make(map[igor.EventType][]igor.OttoScript)
 	components := map[string]igor.IgorPlugin{}
-	filepath.Walk(ComponentDir, func(path string, info os.FileInfo, err error) error {
+	filepath.Walk(StoreDir, func(path string, info os.FileInfo, err error) error {
 		if info.IsDir() {
 			return nil
 		}
@@ -87,12 +86,14 @@ func main() {
 				return err
 			}
 			components[directory] = newComponent
+		/* covered by FilesToMap in igor package
 		case strings.HasSuffix(path, ".json"): // existing state, not guaranteed to be in every directory
 			partialState, err := ioutil.ReadFile(path)
 			if err != nil {
 				return err
 			}
 			states[directory] = partialState
+		*/
 		default:
 			return nil
 		}
