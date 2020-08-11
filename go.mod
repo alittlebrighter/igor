@@ -3,6 +3,7 @@ module github.com/alittlebrighter/igor
 go 1.14
 
 require (
+	github.com/buger/jsonparser v1.0.0
 	github.com/golang/protobuf v1.4.2 // indirect
 	github.com/json-iterator/go v1.1.10
 	github.com/nats-io/nats-server/v2 v2.1.7 // indirect
