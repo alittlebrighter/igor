@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/buger/jsonparser"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -38,7 +39,24 @@ func cleanup() {
 
 func TestJsonToFiles(t *testing.T) {
 	assert.Nil(t, JsonToFiles(jsonData, path, 0755))
-	assert.DirExists(t, path+"/two")
+
+	fileData, err := ioutil.ReadFile(path + "/two/" + attributesFile)
+	assert.Nil(t, err)
+
+	shouldBeStr, err := jsonparser.GetString(fileData, "nestedOne")
+	assert.Equal(t, "one", shouldBeStr)
+
+	cleanup()
+}
+
+func TestFilesToJson(t *testing.T) {
+	setup()
+
+	data, err := FilesToJson(path)
+	assert.Nil(t, err)
+	stuff, err := jsonparser.GetString(data, "two", "nestedOne")
+	assert.Nil(t, err)
+	assert.Equal(t, stuff, "one")
 
 	cleanup()
 }

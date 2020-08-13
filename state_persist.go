@@ -25,11 +25,15 @@ func JsonToFiles(data []byte, path string, perm os.FileMode) error {
 			nestedPath := basePath + string(key)
 			os.MkdirAll(nestedPath, perm)
 
-			// can we do this without recusion?
+			// can we do this without recursion?
 			if err := JsonToFiles(value, nestedPath, perm); err != nil {
 				return err
 			}
 		default:
+			if dataType == jsonparser.String {
+				value = append([]byte(`"`), value...)
+				value = append(value, byte('"'))
+			}
 			var err error
 			attributes, err = jsonparser.Set(attributes, value, string(key))
 			if err != nil {
@@ -44,35 +48,63 @@ func JsonToFiles(data []byte, path string, perm os.FileMode) error {
 		return err
 	}
 
-	if len(attributes) > 2 {
+	if len(attributes) > 2 { // empty attributes == "{}"
 		return ioutil.WriteFile(basePath+attributesFile, attributes, perm)
 	}
 	return nil
 }
 
-/*
 func FilesToJson(path string) ([]byte, error) {
 	data := []byte("{}")
 
-	err := filepath.Walk(path, func(subPath string, info os.FileInfo, err error) error {
-		if info.IsDir() {
-			return nil
+	err := filepath.Walk(path, func(subPath string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
 
-		// handle attributes at root of path
-		// handle nested attributes
+		subPath = strings.TrimPrefix(subPath, path)
+		if len(subPath) == 0 {
+			return nil
+		}
+		subPath = strings.TrimLeft(subPath, "/")
 
 		parts := strings.Split(subPath, "/")
 
-		var err error
-		data, err = jsonparser.Set(data)
+		if info.IsDir() || (len(parts) > 0 && parts[len(parts)-1] != attributesFile) {
+			return nil
+		}
 
-		return nil
+		fileData, err := ioutil.ReadFile(path + "/" + subPath)
+		if err != nil {
+			return err
+		}
+
+		if len(parts) == 1 && parts[0] == attributesFile {
+			// if we have the attributes file at the root of the specified path,
+			// unmarshal to verify we have valid JSON
+			var attributes map[string]json.RawMessage
+			err := json.Unmarshal(fileData, &attributes)
+			if err != nil {
+				return err
+			}
+
+			for k, v := range attributes {
+				data, err = jsonparser.Set(data, v, k)
+				if err != nil {
+					return err
+				}
+			}
+
+			return nil
+		}
+
+		data, err = jsonparser.Set(data, fileData, parts[0:len(parts)-1]...)
+		return err
 	})
 
 	return data, err
 }
-*/
+
 func MapToFiles(data map[string]interface{}, path string, perm os.FileMode) error {
 	simple := map[string]interface{}{}
 	basePath := ""
@@ -107,6 +139,10 @@ func FilesToMap(path string) (map[string]interface{}, error) {
 	data := make(map[string]interface{})
 
 	err := filepath.Walk(path, func(subPath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
 		subPath = strings.TrimPrefix(subPath, path)
 		subPath = strings.TrimPrefix(subPath, "/")
 		if len(subPath) == 0 {
