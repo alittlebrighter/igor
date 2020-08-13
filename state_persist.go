@@ -31,8 +31,16 @@ func JsonToFiles(data []byte, path string, perm os.FileMode) error {
 			}
 		default:
 			if dataType == jsonparser.String {
-				value = append([]byte(`"`), value...)
-				value = append(value, byte('"'))
+				newVal := make([]byte, len(value)+2)
+				newVal[0] = byte('"')
+				newVal[len(newVal)-1] = byte('"')
+				for i := 1; i <= len(value); i++ {
+					newVal[i] = value[i-1]
+				}
+				value = newVal
+				// TODO: benchmark both approaches to see which is faster
+				//value = append([]byte(`"`), value...)
+				//value = append(value, byte('"'))
 			}
 			var err error
 			attributes, err = jsonparser.Set(attributes, value, string(key))
