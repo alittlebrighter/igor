@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"plugin"
 	"strings"
+	"syscall"
 	"time"
 
-	"github.com/alittlebrighter/embd"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/nats-io/nats.go"
 	"github.com/robertkrimen/otto"
@@ -22,12 +23,11 @@ import (
 var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 const (
-	// should we just have one file structure instead of forcing duplication of a folder hierarchy
-	// igor/state/garageDoors/{state.json,reducer.js,garageDoors.so}
 	StoreDir = "state"
 
-	ChannelPrefix = "igor."
-	EventStream   = ChannelPrefix + "events"
+	ChannelPrefix   = "igor."
+	EventStream     = ChannelPrefix + "events"
+	EventQueueGroup = "events_queue"
 )
 
 func main() {
@@ -36,15 +36,9 @@ func main() {
 	nc, err := nats.Connect(nats.DefaultURL)
 	handleErr(err, true)
 	defer nc.Close()
-	ec, err := nats.NewEncodedConn(nc, "json")
+	ec, err := nats.NewEncodedConn(nc, nats.JSON_ENCODER)
 	handleErr(err, true)
 	defer ec.Close()
-
-	// start any component plugins
-	if err := embd.InitGPIO(); err != nil {
-		panic(err)
-	}
-	defer embd.CloseGPIO()
 
 	// both effects and reducers are stored in respective directories
 	// TODO: effects (read in actions and asynchronously dispatch 0:n actions)
@@ -53,7 +47,6 @@ func main() {
 	// reducerSubs: keys=action types, values=list of reducers subscribed
 	vm := otto.New()
 
-	states := make(map[string][]byte)
 	reducers := make(map[igor.EventType][]igor.OttoScript)
 	components := map[string]igor.IgorPlugin{}
 	filepath.Walk(StoreDir, func(path string, info os.FileInfo, err error) error {
@@ -85,15 +78,7 @@ func main() {
 			if err != nil {
 				return err
 			}
-			components[directory] = newComponent
-		/* covered by FilesToMap in igor package
-		case strings.HasSuffix(path, ".json"): // existing state, not guaranteed to be in every directory
-			partialState, err := ioutil.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			states[directory] = partialState
-		*/
+			components[igor.FilePathToTopic(directory)] = newComponent
 		default:
 			return nil
 		}
@@ -103,35 +88,61 @@ func main() {
 
 	// initialize the starting state
 	// read from state directory
+	/*
+		initialState, err := igor.FilesToJson(StoreDir)
+		handleErr(err, false)
+		go func(initState []byte) {
+
+		}()
+	*/
+	stateUpdates := make(chan *nats.Msg, 10)
+	stateSub, err := nc.ChanSubscribe(ChannelPrefix+StoreDir+".*", stateUpdates)
+	defer stateSub.Unsubscribe()
+	defer close(stateUpdates)
+	go func(updates <-chan *nats.Msg, listeners map[string]igor.IgorPlugin) {
+		for update := range updates {
+			for sub, listener := range listeners {
+				topic := strings.TrimPrefix(update.Subject, ChannelPrefix)
+				if strings.HasPrefix(topic, sub) {
+					listener.UpdateState(strings.Split(topic, "."), update.Data)
+				}
+			}
+		}
+	}(stateUpdates, components)
 
 	// listen for incoming actions
 	events := make(chan igor.Event, 10)
-	eventSub, err := ec.BindRecvQueueChan(EventStream, "events_queue", events)
+	eventSub, err := ec.BindRecvQueueChan(EventStream, EventQueueGroup, events)
 	handleErr(err, true)
 	defer eventSub.Unsubscribe()
 	defer close(events)
 
 	// publish new state
-	updater := func(path string, update interface{}) {
-		pathParts := strings.Split(path, "/")
-		pathParts[len(pathParts)-1] = strings.Split(pathParts[len(pathParts)-1], ".")[0]
-		ec.Publish(ChannelPrefix+StoreDir+strings.Join(pathParts, "."), update)
+	updater := func(path string, update []byte) {
+		nc.Publish(ChannelPrefix+StoreDir+"."+igor.FilePathToTopic(path), update)
 	}
 
 	go HandleEvents(events, updater, vm, reducers, StoreDir)
 
+	nc.Publish(EventStream, []byte(`{"type":"test","payload":{"door":"1"}}`))
+
+	sigs := make(chan os.Signal)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	<-sigs
 }
 
 func handleErr(err error, fatal bool) {
 	if err == nil {
 		return
 	}
+	panic(err)
+	/*
+		fmt.Println("error:", err)
 
-	fmt.Println("error:", err)
-
-	if fatal {
-		os.Exit(1)
-	}
+		if fatal {
+			os.Exit(1)
+		}
+	*/
 }
 
 func ProcessReducers(vm *otto.Otto, reducerDir, stateDir string) map[igor.EventType][]igor.OttoScript {
@@ -149,7 +160,7 @@ func ProcessReducers(vm *otto.Otto, reducerDir, stateDir string) map[igor.EventT
 }
 
 // HandleEvents has way too many arguments
-func HandleEvents(eventsIn <-chan igor.Event, update func(string, interface{}), vm *otto.Otto, reducers map[igor.EventType][]igor.OttoScript, stateDir string) {
+func HandleEvents(eventsIn <-chan igor.Event, update func(string, []byte), vm *otto.Otto, reducers map[igor.EventType][]igor.OttoScript, stateDir string) {
 	for event := range eventsIn {
 		for _, script := range append(reducers[event.Type], reducers[igor.EventWildcard]...) {
 			state := make(map[string]interface{})
@@ -172,20 +183,21 @@ func HandleEvents(eventsIn <-chan igor.Event, update func(string, interface{}), 
 			}
 
 			exported, err := result.Export()
-			handleErr(err, false)
 			if err != nil || exported == nil {
+				handleErr(err, false)
 				continue
 			}
 
 			newState, err := json.Marshal(exported)
-			handleErr(err, false)
 			if err != nil {
+				handleErr(err, false)
 				continue
 			}
 
+			updatePath := strings.TrimPrefix(script.Path, stateDir+"/")
+
 			// publish to NATS, a separate subscriber should write the resulting state
-			update(script.Path[1:], newState)
-			handleErr(err, false)
+			update(updatePath[0:strings.LastIndex(updatePath, "/")], newState)
 		}
 	}
 }
@@ -242,7 +254,8 @@ func ProcessComponent(componentPath string, publisher func(igor.Event)) (igor.Ig
 		return nil, err
 	}
 
-	return componentInit.(func(func(igor.Event), []string) igor.IgorPlugin)(publisher, []string{componentPath[0:strings.LastIndex(componentPath, "/")]}), nil
+	init := *componentInit.(*func(func(igor.Event), []string) igor.IgorPlugin)
+	return init(publisher, []string{componentPath[0:strings.LastIndex(componentPath, "/")]}), nil
 }
 
 type StateUpdate struct {
@@ -258,9 +271,3 @@ func DispatcherFactory(natsConn *nats.EncodedConn) Dispatcher {
 		natsConn.Publish(EventStream, e)
 	}
 }
-
-/*
-distributed issues:
-heartbeat events
-who is the leader processing events? solved with NATS queuing
-*/
