@@ -26,11 +26,12 @@ var (
 		}
 	}`)
 
-	path = "testData"
+	path              = "testData"
+	perms os.FileMode = 0755
 )
 
 func setup() error {
-	return MapToFiles(data, path, 0755)
+	return MapToFiles(data, path, perms)
 }
 
 func cleanup() {
@@ -38,7 +39,7 @@ func cleanup() {
 }
 
 func TestJsonToFiles(t *testing.T) {
-	assert.Nil(t, JsonToFiles(jsonData, path, 0755))
+	assert.Nil(t, JsonToFiles(jsonData, path, perms))
 
 	fileData, err := ioutil.ReadFile(path + "/two/" + attributesFile)
 	assert.Nil(t, err)
@@ -57,6 +58,16 @@ func TestFilesToJson(t *testing.T) {
 	stuff, err := jsonparser.GetString(data, "two", "nestedOne")
 	assert.Nil(t, err)
 	assert.Equal(t, stuff, "one")
+
+	cleanup()
+}
+
+func TestEmptyFilesToJson(t *testing.T) {
+	os.MkdirAll(path, perms)
+
+	data, err := FilesToJson(path)
+	assert.Nil(t, err)
+	assert.Equal(t, []byte("{}"), data)
 
 	cleanup()
 }
