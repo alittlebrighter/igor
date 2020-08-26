@@ -101,14 +101,26 @@ func main() {
 	defer close(stateUpdates)
 	go func(updates <-chan *nats.Msg, listeners map[string]igor.IgorPlugin) {
 		for update := range updates {
+			fmt.Println("topic:", update.Subject)
 			for sub, listener := range listeners {
 				topic := strings.TrimPrefix(update.Subject, ChannelPrefix)
-				if strings.HasPrefix(topic, sub) {
+				if strings.HasPrefix(topic, sub) || topic == StoreDir+".INIT" {
 					listener.UpdateState(strings.Split(topic, "."), update.Data)
 				}
 			}
 		}
 	}(stateUpdates, components)
+
+	// initialize the starting state
+	// read from state directory
+	initialState, err := igor.FilesToJson(StoreDir)
+	handleErr(err, false)
+	nc.Publish(ChannelPrefix+StoreDir+".INIT", initialState)
+	/*
+		go func(initState []byte) {
+
+		}()
+	*/
 
 	// listen for incoming actions
 	events := make(chan igor.Event, 10)
