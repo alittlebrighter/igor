@@ -68,4 +68,12 @@ type ScriptManager interface {
 	HandleEvents(<-chan Event)
 }
 
+func TopicToFilePath(topic string) string {
+	return strings.ReplaceAll(topic, ".", "/")
+}
+
+func FilePathToTopic(filePath string) string {
+	return strings.ReplaceAll(filePath, "/", ".")
+}
+
 //func NewScriptRunner(dirs []string)
