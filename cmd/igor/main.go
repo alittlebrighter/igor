@@ -3,8 +3,6 @@ package main
 import (
 	"bufio"
 	"errors"
-	"fmt"
-	"io/ioutil"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -49,7 +47,7 @@ func main() {
 
 	reducers := make(map[igor.EventType][]igor.OttoScript)
 	components := map[string]igor.IgorPlugin{}
-	filepath.Walk(StoreDir, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(StoreDir, func(path string, info os.FileInfo, err error) error {
 		if info.IsDir() {
 			return nil
 		}
@@ -59,7 +57,6 @@ func main() {
 		case strings.HasSuffix(path, ".js"): // reducers, TODO: make this case conditional a method to accommodate more reducer types
 			program, eTypes, err := ParseScript(vm, path)
 			if err != nil {
-				handleErr(err, false)
 				return err
 			}
 
@@ -79,48 +76,37 @@ func main() {
 				return err
 			}
 			components[igor.FilePathToTopic(directory)] = newComponent
-		default:
-			return nil
 		}
 
 		return nil
 	})
-
-	// initialize the starting state
-	// read from state directory
-	/*
-		initialState, err := igor.FilesToJson(StoreDir)
-		handleErr(err, false)
-		go func(initState []byte) {
-
-		}()
-	*/
-	stateUpdates := make(chan *nats.Msg, 10)
-	stateSub, err := nc.ChanSubscribe(ChannelPrefix+StoreDir+".*", stateUpdates)
-	defer stateSub.Unsubscribe()
-	defer close(stateUpdates)
-	go func(updates <-chan *nats.Msg, listeners map[string]igor.IgorPlugin) {
-		for update := range updates {
-			fmt.Println("topic:", update.Subject)
-			for sub, listener := range listeners {
-				topic := strings.TrimPrefix(update.Subject, ChannelPrefix)
-				if strings.HasPrefix(topic, sub) || topic == StoreDir+".INIT" {
-					listener.UpdateState(strings.Split(topic, "."), update.Data)
-				}
-			}
-		}
-	}(stateUpdates, components)
+	handleErr(err, true)
 
 	// initialize the starting state
 	// read from state directory
 	initialState, err := igor.FilesToJson(StoreDir)
-	handleErr(err, false)
-	nc.Publish(ChannelPrefix+StoreDir+".INIT", initialState)
-	/*
-		go func(initState []byte) {
+	handleErr(err, true)
+	state := igor.NewAutomationState(initialState)
 
-		}()
-	*/
+	stateUpdates := make(chan *nats.Msg, 10)
+	stateSub, err := nc.ChanSubscribe(ChannelPrefix+StoreDir+".*", stateUpdates)
+	defer stateSub.Unsubscribe()
+	defer close(stateUpdates)
+	go func(updates <-chan *nats.Msg, listeners map[string]igor.IgorPlugin, global *igor.AutomationState) {
+		for update := range updates {
+			updateAddress := strings.Split(update.Subject, ".")
+			global.Mutate(update.Data, updateAddress...)
+
+			for sub, listener := range listeners {
+				topic := strings.TrimPrefix(update.Subject, ChannelPrefix)
+				if strings.HasPrefix(topic, sub) || topic == StoreDir+".INIT" {
+					listener.UpdateState(updateAddress, update.Data)
+				}
+			}
+		}
+	}(stateUpdates, components, state)
+
+	nc.Publish(ChannelPrefix+StoreDir+".INIT", state.State())
 
 	// listen for incoming actions
 	events := make(chan igor.Event, 10)
@@ -130,11 +116,11 @@ func main() {
 	defer close(events)
 
 	// publish new state
-	updater := func(path string, update []byte) {
-		nc.Publish(ChannelPrefix+StoreDir+"."+igor.FilePathToTopic(path), update)
+	updater := func(path []string, update []byte) {
+		nc.Publish(strings.Join(append([]string{ChannelPrefix, StoreDir}, path...), "."), update)
 	}
 
-	go HandleEvents(events, updater, vm, reducers, StoreDir)
+	go HandleEvents(events, updater, vm, reducers, state)
 
 	nc.Publish(EventStream, []byte(`{"type":"test","payload":{"door":"1"}}`))
 
@@ -172,26 +158,24 @@ func ProcessReducers(vm *otto.Otto, reducerDir, stateDir string) map[igor.EventT
 }
 
 // HandleEvents has way too many arguments
-func HandleEvents(eventsIn <-chan igor.Event, update func(string, []byte), vm *otto.Otto, reducers map[igor.EventType][]igor.OttoScript, stateDir string) {
+func HandleEvents(eventsIn <-chan igor.Event, update func([]string, []byte), vm *otto.Otto, reducers map[igor.EventType][]igor.OttoScript, state *igor.AutomationState) {
 	for event := range eventsIn {
 		for _, script := range append(reducers[event.Type], reducers[igor.EventWildcard]...) {
-			state := make(map[string]interface{})
-
-			// reducer is reducers/**/script.js and state is state/**/state.json
-			statePath := stateDir + script.Path + "on"
-			stateData, err := ioutil.ReadFile(statePath)
-			if err == nil {
-				json.Unmarshal(stateData, state)
+			current := state.State()
+			if event.Type != igor.EventWildcard {
+				statePath := strings.TrimPrefix(script.Path[:strings.LastIndex(script.Path, "/")], StoreDir+"/")
+				current, _ = state.Select(strings.Split(statePath, "/")...)
 			}
 
 			vm.Set("input", map[string]interface{}{
-				"state": state,
+				"state": current,
 				"event": event,
 			})
 
 			result, err := vm.Run(script.Program)
 			if err != nil {
-				fmt.Println("error running:", err.Error())
+				handleErr(err, false)
+				continue
 			}
 
 			exported, err := result.Export()
@@ -206,10 +190,11 @@ func HandleEvents(eventsIn <-chan igor.Event, update func(string, []byte), vm *o
 				continue
 			}
 
-			updatePath := strings.TrimPrefix(script.Path, stateDir+"/")
+			filePath := strings.TrimPrefix(script.Path, StoreDir+"/")
+			updatePath := strings.Split(filePath, "/")
 
 			// publish to NATS, a separate subscriber should write the resulting state
-			update(updatePath[0:strings.LastIndex(updatePath, "/")], newState)
+			update(updatePath[:len(updatePath)-1], newState)
 		}
 	}
 }
