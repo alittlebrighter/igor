@@ -21,7 +21,11 @@ func Init(dispatcher func(igor.Event), statePath string) igor.IgorPlugin {
 var Init = NewGarageDoorsController
 
 type GarageDoorsController struct {
-	config     *GarageDoorsConfig `json:"config"`
+	Config      *GarageDoorsConfig `json:"config"`
+	LastTrigger struct {
+		Time  int64 `json:"time"`
+		Force bool  `json:"force"`
+	} `json:"lastTrigger"`
 	dispatcher func(igor.Event)
 	statePath  []string
 }
