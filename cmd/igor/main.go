@@ -90,7 +90,7 @@ func main() {
 	state := igor.NewAutomationState(initialState)
 
 	stateUpdates := make(chan *nats.Msg, 10)
-	stateSub, err := nc.ChanSubscribe(ChannelPrefix+"."+StoreDir+"."+nats., stateUpdates)
+	stateSub, err := nc.ChanSubscribe(ChannelPrefix+"."+StoreDir+".>", stateUpdates)
 	defer stateSub.Unsubscribe()
 	defer close(stateUpdates)
 	go func(updates <-chan *nats.Msg, listeners map[string]igor.IgorPlugin, global *igor.AutomationState) {
