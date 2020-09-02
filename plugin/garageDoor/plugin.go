@@ -13,12 +13,9 @@ import (
 
 var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
-/*
-func Init(dispatcher func(igor.Event), statePath string) igor.IgorPlugin {
-	return NewGarageDoorsController(dispatcher)
+func Init(dispatcher func(igor.Event), statePath []string) igor.IgorPlugin {
+	return NewGarageDoorsController(dispatcher, statePath)
 }
-*/
-var Init = NewGarageDoorsController
 
 type GarageDoorsController struct {
 	Config      *GarageDoorsConfig `json:"config"`
