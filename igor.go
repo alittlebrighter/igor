@@ -76,4 +76,14 @@ func FilePathToTopic(filePath string) string {
 	return strings.ReplaceAll(filePath, "/", ".")
 }
 
+func TrimStringSlice(in []string) []string {
+	out := []string{}
+	for _, item := range in {
+		if len(item) > 0 {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
 //func NewScriptRunner(dirs []string)
