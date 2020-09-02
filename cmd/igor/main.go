@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -23,9 +24,9 @@ var json = jsoniter.ConfigCompatibleWithStandardLibrary
 const (
 	StoreDir = "state"
 
-	ChannelPrefix   = "igor."
-	EventStream     = ChannelPrefix + "events"
-	EventQueueGroup = "events_queue"
+	ChannelPrefix   = "igor"
+	EventStream     = ChannelPrefix + ".events"
+	EventQueueGroup = "igor_events_queue"
 )
 
 func main() {
@@ -54,7 +55,7 @@ func main() {
 		directory := path[0:strings.LastIndex(path, "/")]
 
 		switch {
-		case strings.HasSuffix(path, ".js"): // reducers, TODO: make this case conditional a method to accommodate more reducer types
+		case strings.HasSuffix(path, ".js"): // TODO: make this case conditional a method to accommodate more reducer types
 			program, eTypes, err := ParseScript(vm, path)
 			if err != nil {
 				return err
@@ -89,7 +90,7 @@ func main() {
 	state := igor.NewAutomationState(initialState)
 
 	stateUpdates := make(chan *nats.Msg, 10)
-	stateSub, err := nc.ChanSubscribe(ChannelPrefix+StoreDir+".*", stateUpdates)
+	stateSub, err := nc.ChanSubscribe(ChannelPrefix+"."+StoreDir+"."+nats., stateUpdates)
 	defer stateSub.Unsubscribe()
 	defer close(stateUpdates)
 	go func(updates <-chan *nats.Msg, listeners map[string]igor.IgorPlugin, global *igor.AutomationState) {
@@ -98,7 +99,7 @@ func main() {
 			global.Mutate(update.Data, updateAddress...)
 
 			for sub, listener := range listeners {
-				topic := strings.TrimPrefix(update.Subject, ChannelPrefix)
+				topic := strings.TrimPrefix(update.Subject, ChannelPrefix+".")
 				if strings.HasPrefix(topic, sub) || topic == StoreDir+".INIT" {
 					listener.UpdateState(updateAddress, update.Data)
 				}
@@ -106,7 +107,7 @@ func main() {
 		}
 	}(stateUpdates, components, state)
 
-	nc.Publish(ChannelPrefix+StoreDir+".INIT", state.State())
+	nc.Publish(strings.Join([]string{ChannelPrefix, StoreDir, "INIT"}, "."), state.State())
 
 	// listen for incoming actions
 	events := make(chan igor.Event, 10)
@@ -117,6 +118,7 @@ func main() {
 
 	// publish new state
 	updater := func(path []string, update []byte) {
+		fmt.Println("updating", strings.Join(append([]string{ChannelPrefix, StoreDir}, path...), "."))
 		nc.Publish(strings.Join(append([]string{ChannelPrefix, StoreDir}, path...), "."), update)
 	}
 
@@ -178,8 +180,19 @@ func HandleEvents(eventsIn <-chan igor.Event, update func([]string, []byte), vm 
 				continue
 			}
 
-			exported, err := result.Export()
-			if err != nil || exported == nil {
+			// deltaPath should be the path within the state structure where changes were made,
+			// empty string denotes the entire state should be swapped
+			deltaPathStr, err := result.Object().Get("path")
+			// delta is the new state the should be applied at the specified path
+			delta, err := result.Object().Get("delta")
+			if err != nil {
+				handleErr(err, false)
+				continue
+			}
+
+			deltaPath, err := deltaPathStr.ToString()
+			exported, err := delta.Export()
+			if err != nil {
 				handleErr(err, false)
 				continue
 			}
@@ -191,10 +204,14 @@ func HandleEvents(eventsIn <-chan igor.Event, update func([]string, []byte), vm 
 			}
 
 			filePath := strings.TrimPrefix(script.Path, StoreDir+"/")
-			updatePath := strings.Split(filePath, "/")
+			filePath = filePath[:strings.LastIndex(filePath, "/")]
+			updatePath := append(
+				igor.TrimStringSlice(strings.Split(filePath, "/")),
+				igor.TrimStringSlice(strings.Split(deltaPath, "."))...,
+			)
 
 			// publish to NATS, a separate subscriber should write the resulting state
-			update(updatePath[:len(updatePath)-1], newState)
+			update(updatePath, newState)
 		}
 	}
 }
@@ -251,7 +268,7 @@ func ProcessComponent(componentPath string, publisher func(igor.Event)) (igor.Ig
 		return nil, err
 	}
 
-	init := *componentInit.(*func(func(igor.Event), []string) igor.IgorPlugin)
+	init := componentInit.(func(func(igor.Event), []string) igor.IgorPlugin)
 	return init(publisher, []string{componentPath[0:strings.LastIndex(componentPath, "/")]}), nil
 }
 
