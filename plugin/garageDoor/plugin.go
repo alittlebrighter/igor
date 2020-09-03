@@ -60,19 +60,19 @@ func (gdc *GarageDoorsController) UpdateState(path []string, update []byte) erro
 }
 
 func (gdc *GarageDoorsController) SetConfigFromData(newConfig []byte) error {
-	return json.Unmarshal(newConfig, gdc.config)
+	return json.Unmarshal(newConfig, gdc.Config)
 }
 
 func (gdc *GarageDoorsController) Trigger(doorName string, force bool) error {
-	door, exists := gdc.config.DoorMap[doorName]
+	door, exists := gdc.Config.DoorMap[doorName]
 	if !exists {
 		// dispatch door not found event
 		return errors.New("no door found with label '" + doorName + "'")
 	}
 
-	triggerTime := gdc.config.Trigger
+	triggerTime := gdc.Config.Trigger
 	if force {
-		triggerTime = gdc.config.Force
+		triggerTime = gdc.Config.Force
 	}
 	door.Trigger(triggerTime)
 
