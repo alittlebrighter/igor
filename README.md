@@ -1,7 +1,7 @@
 # Igor Home Automation
 Plug and play home automation solution.  If a node fails just plug in another one and the system should continue with little to no disruption.
 
-This is achieved through a combination of [lansrv](https://github.com/alittlebrighter/lansrv), [nats-server](https://github.com/nats-io/nats-server), and [rqlite](https://github.com/rqlite/rqlite) (untested).  When a node starts up, `nats-server` and `rqlite` use `lansrv` to find all of the other active nodes on the LAN and join the cluster (or start their own if there are no available nodes).  Events are published to the local `nats-server` and recorded in `rqlite`.  The respective clusters then distribute the data to the other nodes on the LAN.
+This is achieved through a combination of [lansrv](https://github.com/alittlebrighter/lansrv) and [nats-server](https://github.com/nats-io/nats-server).  When a node starts up, `nats-server` uses `lansrv` to find all of the other active nodes on the LAN and join the cluster (or start their own if there are no available nodes).  Events are published to the local `nats-server`, reducers written in Javascript calculate the new state and publish the resulting delta, and finally devices with plugins to control devices subscribe to the resulting state updates.
 
 ## Architecture
 Home automation turns your home into one big user interface.  The flux architecture is the best I've seen for managing stateful systems like this and Igor seeks to apply the concepts of flux to home automation.  Specifically, it seeks to use the flux architecture as implemented by NGRX which adds the concept of effects which are functions that receive actions and produce 0:n actions as a result.
